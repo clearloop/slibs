@@ -1,5 +1,4 @@
 //! Command bump
-use crate::Config;
 use anyhow::{anyhow, Result};
 use ccli::clap::{self, Parser, ValueEnum};
 use semver::Version as SemVer;
@@ -19,7 +18,12 @@ pub struct Version {
 
 impl Version {
     /// Bumps the version to the given one.
-    pub fn run(&self, manifest: &PathBuf, config: Config) -> Result<()> {
+    ///
+    /// Updates `[workspace.package].version` and every entry in
+    /// `[workspace.dependencies]` that is a workspace path dep — i.e.
+    /// has both `path` and `version` fields. External crates (no `path`)
+    /// and internal-only path deps (no `version`) are left alone.
+    pub fn run(&self, manifest: &PathBuf) -> Result<()> {
         let mut workspace = Document::from_str(&std::fs::read_to_string(manifest)?)?;
         let bump = self.bump.run(
             workspace["workspace"]["package"]["version"]
@@ -35,22 +39,28 @@ impl Version {
             return Ok(());
         }
 
-        let Some(deps) = workspace["workspace"]["dependencies"].as_table_mut() else {
-            return Err(anyhow!(
-                "Failed to parse dependencies from workspace {manifest:?}"
-            ));
-        };
-
-        for package in config.packages {
-            if !deps.contains_key(&package) {
-                return Err(anyhow!("package {} not found", package));
-            }
-
-            deps[&package]["version"] = toml_edit::value(version.clone());
-        }
+        bump_path_dep_versions(&mut workspace, &version);
 
         fs::write(manifest, workspace.to_string())?;
         Ok(())
+    }
+}
+
+/// Rewrite the `version` field on every `[workspace.dependencies]`
+/// entry that carries both `path` and `version` — i.e. a workspace
+/// path dep that is also published. External crates (no `path`) and
+/// internal-only path deps (no `version`) are left alone.
+fn bump_path_dep_versions(doc: &mut Document, version: &str) {
+    let Some(deps) = doc["workspace"]["dependencies"].as_table_mut() else {
+        return;
+    };
+    for (_name, item) in deps.iter_mut() {
+        let Some(table) = item.as_table_like_mut() else {
+            continue;
+        };
+        if table.contains_key("path") && table.contains_key("version") {
+            table.insert("version", toml_edit::value(version.to_string()));
+        }
     }
 }
 
@@ -92,5 +102,47 @@ impl FromStr for Bump {
             "major" => Ok(Bump::Major),
             _ => Ok(Bump::Version(SemVer::parse(s)?)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bump_leaves_external_deps_alone() {
+        // Regression: a previous cut only checked for the `version` key,
+        // which clobbered external inline-table deps like reqwest and
+        // serde. The filter must also require `path`.
+        let input = r#"
+[workspace.dependencies]
+anyhow = "1.0.76"
+reqwest = { version = "0.11.23", default-features = false }
+serde = { version = "1.0.193", default-features = false }
+ccli = { path = "ccli", version = "0.0.1" }
+"#;
+        let mut doc = Document::from_str(input).unwrap();
+        bump_path_dep_versions(&mut doc, "0.0.2");
+        let out = doc.to_string();
+        assert!(out.contains(r#"anyhow = "1.0.76""#));
+        assert!(out.contains(r#"reqwest = { version = "0.11.23", default-features = false }"#));
+        assert!(out.contains(r#"serde = { version = "1.0.193", default-features = false }"#));
+        assert!(out.contains(r#"ccli = { path = "ccli", version = "0.0.2" }"#));
+    }
+
+    #[test]
+    fn bump_handles_subtable_form() {
+        // The dotted-table form `[workspace.dependencies.foo]` parses
+        // as a regular Table, not an InlineTable. `as_table_like_mut`
+        // must still see it.
+        let input = r#"
+[workspace.dependencies.foo]
+path = "foo"
+version = "0.0.1"
+"#;
+        let mut doc = Document::from_str(input).unwrap();
+        bump_path_dep_versions(&mut doc, "0.0.2");
+        let out = doc.to_string();
+        assert!(out.contains(r#"version = "0.0.2""#));
     }
 }

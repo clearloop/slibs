@@ -7,4 +7,5 @@ pub use crate::{
 
 mod cmd;
 mod config;
+mod graph;
 mod version;
