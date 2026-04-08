@@ -9,13 +9,18 @@ use toml_edit::Document;
 
 /// Publish crates.
 #[derive(Debug, Parser, Clone)]
-pub struct Publish;
+pub struct Publish {
+    /// Print the resolved publish plan without invoking `cargo publish`.
+    #[clap(short, long)]
+    dry_run: bool,
+}
 
 impl Publish {
     /// Run publish.
     ///
     /// Walks the workspace in topological order, skipping crates listed
     /// in `ignore` and any whose current version is already on crates.io.
+    /// With `--dry-run`, prints the plan and returns without publishing.
     pub fn run(&self, manifest: &PathBuf, ignore: &[String]) -> Result<()> {
         let workspace = Document::from_str(&std::fs::read_to_string(manifest)?)?;
         let version = workspace["workspace"]["package"]["version"]
@@ -26,7 +31,12 @@ impl Publish {
 
         for pkg in order {
             if version::verify(&pkg, version)? {
-                println!("Package {pkg}@{version} has already been published.");
+                println!("{pkg}@{version} already published, skipping");
+                continue;
+            }
+
+            if self.dry_run {
+                println!("{pkg}@{version} would publish");
                 continue;
             }
 
