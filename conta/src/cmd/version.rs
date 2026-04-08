@@ -1,5 +1,4 @@
 //! Command bump
-use crate::Config;
 use anyhow::{anyhow, Result};
 use ccli::clap::{self, Parser, ValueEnum};
 use semver::Version as SemVer;
@@ -19,7 +18,13 @@ pub struct Version {
 
 impl Version {
     /// Bumps the version to the given one.
-    pub fn run(&self, manifest: &PathBuf, config: Config) -> Result<()> {
+    ///
+    /// Updates `[workspace.package].version` and every entry in
+    /// `[workspace.dependencies]` that already has a `version` field —
+    /// i.e. workspace path deps that are also published. Entries without
+    /// a version (internal-only path deps, external crates) are left
+    /// alone.
+    pub fn run(&self, manifest: &PathBuf) -> Result<()> {
         let mut workspace = Document::from_str(&std::fs::read_to_string(manifest)?)?;
         let bump = self.bump.run(
             workspace["workspace"]["package"]["version"]
@@ -35,18 +40,15 @@ impl Version {
             return Ok(());
         }
 
-        let Some(deps) = workspace["workspace"]["dependencies"].as_table_mut() else {
-            return Err(anyhow!(
-                "Failed to parse dependencies from workspace {manifest:?}"
-            ));
-        };
-
-        for package in config.packages {
-            if !deps.contains_key(&package) {
-                return Err(anyhow!("package {} not found", package));
+        if let Some(deps) = workspace["workspace"]["dependencies"].as_table_mut() {
+            for (_name, item) in deps.iter_mut() {
+                let Some(table) = item.as_table_like_mut() else {
+                    continue;
+                };
+                if table.contains_key("version") {
+                    table.insert("version", toml_edit::value(version.clone()));
+                }
             }
-
-            deps[&package]["version"] = toml_edit::value(version.clone());
         }
 
         fs::write(manifest, workspace.to_string())?;

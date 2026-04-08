@@ -1,16 +1,16 @@
 //! Conta Configuration
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use core::str::FromStr;
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path::Path};
 use toml_edit::Document;
 
 /// Conta configuration.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Config {
-    /// The packages should be kept in order by the
-    /// dependency graph.
-    pub packages: Vec<String>,
+    /// Workspace members to skip when publishing.
+    #[serde(default)]
+    pub ignore: Vec<String>,
 }
 
 impl Config {
@@ -20,11 +20,15 @@ impl Config {
     }
 
     /// Create a new configuration from cargo manifest.
+    ///
+    /// A missing `[workspace.metadata.conta]` table yields the default
+    /// (empty) config — conta's whole point is to publish everything,
+    /// so no metadata means no exclusions.
     pub fn from_manifest(manifest: impl AsRef<Path>) -> Result<Self> {
         let doc = Document::from_str(&fs::read_to_string(manifest)?)?;
-        let table = doc["workspace"]["metadata"]["conta"]
-            .as_table()
-            .ok_or_else(|| anyhow!("No conta metadata"))?;
+        let Some(table) = doc["workspace"]["metadata"]["conta"].as_table() else {
+            return Ok(Self::default());
+        };
         toml::from_str(&table.to_string()).map_err(|e| e.into())
     }
 
@@ -50,6 +54,6 @@ impl Config {
 fn from_manifest() -> Result<()> {
     let manifest = env!("CARGO_MANIFEST_DIR");
     let config = Config::from_manifest(format!("{manifest}/../Cargo.toml"))?;
-    assert_eq!(config.packages, vec!["ccli".to_string(), "conta".into()]);
+    assert!(config.ignore.is_empty());
     Ok(())
 }

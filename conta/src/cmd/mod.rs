@@ -60,11 +60,10 @@ impl App for Conta {
 
     fn run(&self) -> Result<()> {
         let manifest = self.manifest();
-        let config = self.config()?;
 
         match &self.command {
-            Command::Version(version) => version.run(&manifest, config),
-            Command::Publish(publish) => publish.run(&manifest, config.packages),
+            Command::Version(version) => version.run(&manifest),
+            Command::Publish(publish) => publish.run(&manifest, &self.config()?.ignore),
         }
     }
 }
