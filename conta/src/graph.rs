@@ -23,6 +23,11 @@ struct Package {
     name: String,
     id: String,
     dependencies: Vec<Dependency>,
+    /// `None` = publish anywhere; `Some([])` = `publish = false`;
+    /// `Some([...])` = restricted to named registries. cargo normalizes
+    /// `publish = false` in Cargo.toml to an empty array in metadata.
+    #[serde(default)]
+    publish: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,7 +66,6 @@ pub fn resolve(manifest: &Path, ignore: &[String]) -> Result<Vec<String>> {
     let meta: Metadata = serde_json::from_slice(&output.stdout)?;
 
     let members: BTreeSet<&str> = meta.workspace_members.iter().map(String::as_str).collect();
-    let ignore: BTreeSet<&str> = ignore.iter().map(String::as_str).collect();
 
     // name -> package, restricted to workspace members
     let by_name: BTreeMap<&str, &Package> = meta
@@ -70,6 +74,16 @@ pub fn resolve(manifest: &Path, ignore: &[String]) -> Result<Vec<String>> {
         .filter(|p| members.contains(p.id.as_str()))
         .map(|p| (p.name.as_str(), p))
         .collect();
+
+    // Crates with `publish = false` fold into the ignore set — cargo
+    // would reject them anyway, so treat them exactly like explicit
+    // ignores for dependency-guard purposes.
+    let mut ignore: BTreeSet<&str> = ignore.iter().map(String::as_str).collect();
+    for (name, pkg) in &by_name {
+        if matches!(pkg.publish.as_deref(), Some([])) {
+            ignore.insert(name);
+        }
+    }
 
     // Build the full intra-workspace graph first. Dev-deps and build-deps
     // are dropped — they're stripped from the uploaded crate and don't

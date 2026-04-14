@@ -26,10 +26,11 @@ impl Config {
     /// so no metadata means no exclusions.
     pub fn from_manifest(manifest: impl AsRef<Path>) -> Result<Self> {
         let doc = Document::from_str(&fs::read_to_string(manifest)?)?;
-        let Some(table) = doc["workspace"]["metadata"]["conta"].as_table() else {
-            return Ok(Self::default());
-        };
-        toml::from_str(&table.to_string()).map_err(|e| e.into())
+        Ok(doc["workspace"]["metadata"]["conta"]
+            .as_table()
+            .map(|t| toml::from_str::<Self>(&t.to_string()))
+            .transpose()?
+            .unwrap_or_default())
     }
 
     /// Create a new configuration from optional path.
