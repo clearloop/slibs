@@ -29,9 +29,14 @@ impl Publish {
 
         let order = graph::resolve(manifest, ignore)?;
 
+        let mut published = 0u32;
+        let mut skipped = 0u32;
+        let mut failed = Vec::new();
+
         for pkg in order {
             if version::verify(&pkg, version)? {
                 println!("{pkg}@{version} already published, skipping");
+                skipped += 1;
                 continue;
             }
 
@@ -40,23 +45,40 @@ impl Publish {
                 continue;
             }
 
-            if !self.publish(&pkg)? {
-                return Err(anyhow!("Failed to publish {pkg}"));
+            if let Err(err) = self.publish(&pkg) {
+                eprintln!("failed to publish {pkg}: {err}, continuing");
+                failed.push(pkg);
+            } else {
+                published += 1;
             }
+        }
+
+        println!(
+            "\nsummary: {published} published, {skipped} skipped, {} failed",
+            failed.len(),
+        );
+        for pkg in &failed {
+            println!("  failed: {pkg}");
+        }
+
+        if !failed.is_empty() {
+            return Err(anyhow!("{} crate(s) failed to publish", failed.len()));
         }
 
         Ok(())
     }
 
     /// Publish cargo package
-    fn publish(&self, package: &str) -> Result<bool> {
-        Command::new("cargo")
+    fn publish(&self, package: &str) -> Result<()> {
+        let status = Command::new("cargo")
             .arg("publish")
             .arg("-p")
             .arg(package)
             .arg("--allow-dirty")
-            .status()
-            .map(|status| status.success())
-            .map_err(|err| err.into())
+            .status()?;
+        if !status.success() {
+            return Err(anyhow!("cargo publish -p {package} exited with {status}"));
+        }
+        Ok(())
     }
 }
